@@ -1,0 +1,160 @@
+"""
+report_generator.py
+───────────────────
+Generates a downloadable PDF loan risk report using ReportLab.
+"""
+
+from __future__ import annotations
+import io
+from datetime import datetime
+from pathlib import Path
+
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import cm
+from reportlab.lib import colors
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+)
+
+from src.config.config import REPORTS_DIR
+
+
+# ── Colour palette ────────────────────────────────────────────────────────────
+BLUE       = colors.HexColor("#1e3a5f")
+LIGHT_BLUE = colors.HexColor("#2563EB")
+RED        = colors.HexColor("#dc2626")
+GREEN      = colors.HexColor("#16a34a")
+AMBER      = colors.HexColor("#d97706")
+LIGHT_GREY = colors.HexColor("#f8fafc")
+BORDER     = colors.HexColor("#e2e8f0")
+
+
+def generate_pdf_report(
+    applicant: dict,
+    risk_label: str,
+    risk_probability: float,
+    fraud_result: dict,
+    shap_explanation: dict,
+    save_to_disk: bool = True,
+) -> bytes:
+    """
+    Build a PDF report and return raw bytes.
+
+    Parameters
+    ----------
+    applicant        : raw applicant input dict
+    risk_label       : "HIGH RISK" or "LOW RISK"
+    risk_probability : float 0-1
+    fraud_result     : dict from FraudDetector
+    shap_explanation : dict {feature: shap_value}
+    save_to_disk     : also persist to REPORTS_DIR
+
+    Returns
+    -------
+    bytes of the PDF
+    """
+    buf    = io.BytesIO()
+    styles = getSampleStyleSheet()
+    doc    = SimpleDocTemplate(
+        buf, pagesize=A4,
+        leftMargin=2*cm, rightMargin=2*cm,
+        topMargin=2*cm, bottomMargin=2*cm,
+    )
+
+    # ── Custom styles ─────────────────────────────────────────────────────────
+    h1 = ParagraphStyle("h1", parent=styles["Heading1"], textColor=BLUE, fontSize=18, spaceAfter=4)
+    h2 = ParagraphStyle("h2", parent=styles["Heading2"], textColor=LIGHT_BLUE, fontSize=13, spaceAfter=2)
+    body = styles["BodyText"]
+    body.fontSize = 10
+
+    risk_colour = RED if risk_label == "HIGH RISK" else GREEN
+    risk_style  = ParagraphStyle("risk", parent=h1, textColor=risk_colour, fontSize=22)
+
+    story: list = []
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    story.append(Paragraph("🏦 Smart Loan Risk Prediction Report", h1))
+    story.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", body))
+    story.append(HRFlowable(width="100%", thickness=1, color=BORDER))
+    story.append(Spacer(1, 0.3*cm))
+
+    # ── Risk verdict ──────────────────────────────────────────────────────────
+    story.append(Paragraph(f"Prediction: {risk_label}", risk_style))
+    story.append(Paragraph(f"Risk Probability: <b>{risk_probability*100:.1f}%</b>", body))
+    story.append(Spacer(1, 0.4*cm))
+
+    # ── Applicant details ─────────────────────────────────────────────────────
+    story.append(Paragraph("Applicant Details", h2))
+    app_data = [
+        ["Field", "Value"],
+        *[[str(k), str(v)] for k, v in applicant.items()],
+    ]
+    _add_table(story, app_data)
+    story.append(Spacer(1, 0.4*cm))
+
+    # ── Fraud analysis ────────────────────────────────────────────────────────
+    story.append(Paragraph("Fraud Risk Analysis", h2))
+    fraud_score = fraud_result.get("fraud_score", 0)
+    fraud_colour = RED if fraud_result.get("is_fraud_flag") else GREEN
+    fraud_style  = ParagraphStyle("fraud", parent=body, textColor=fraud_colour, fontName="Helvetica-Bold")
+    story.append(Paragraph(f"Fraud Score: {fraud_score:.0f}/100", fraud_style))
+    story.append(Paragraph(fraud_result.get("recommendation", ""), body))
+    story.append(Spacer(1, 0.2*cm))
+    flags = fraud_result.get("flags", [])
+    if flags:
+        story.append(Paragraph("Fraud Flags Triggered:", body))
+        for flag in flags:
+            story.append(Paragraph(f"• {flag}", body))
+    story.append(Spacer(1, 0.4*cm))
+
+    # ── SHAP explanation ──────────────────────────────────────────────────────
+    if shap_explanation:
+        story.append(Paragraph("Top SHAP Feature Contributions", h2))
+        story.append(Paragraph(
+            "Positive values increase risk; negative values reduce risk.", body
+        ))
+        sorted_shap = sorted(shap_explanation.items(), key=lambda x: abs(x[1]), reverse=True)[:10]
+        shap_data   = [["Feature", "SHAP Value", "Direction"]] + [
+            [k, f"{v:+.4f}", "↑ Risk" if v > 0 else "↓ Risk"]
+            for k, v in sorted_shap
+        ]
+        _add_table(story, shap_data, col_widths=[8*cm, 4*cm, 4*cm])
+        story.append(Spacer(1, 0.4*cm))
+
+    # ── Footer ────────────────────────────────────────────────────────────────
+    story.append(HRFlowable(width="100%", thickness=1, color=BORDER))
+    story.append(Paragraph(
+        "CONFIDENTIAL — Generated by Smart Loan Risk Prediction System v1.0.0. "
+        "For internal use only. AI predictions are advisory; final decisions require human review.",
+        ParagraphStyle("footer", parent=body, fontSize=8, textColor=colors.grey),
+    ))
+
+    doc.build(story)
+    pdf_bytes = buf.getvalue()
+
+    if save_to_disk:
+        fname = REPORTS_DIR / f"loan_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        fname.write_bytes(pdf_bytes)
+
+    return pdf_bytes
+
+
+# ── Table helper ──────────────────────────────────────────────────────────────
+def _add_table(story, data: list, col_widths=None):
+    tbl = Table(data, colWidths=col_widths)
+    tbl.setStyle(TableStyle([
+        ("BACKGROUND",   (0, 0), (-1, 0), BLUE),
+        ("TEXTCOLOR",    (0, 0), (-1, 0), colors.white),
+        ("FONTNAME",     (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE",     (0, 0), (-1, 0), 10),
+        ("BACKGROUND",   (0, 1), (-1, -1), LIGHT_GREY),
+        ("ROWBACKGROUNDS",(0, 1), (-1, -1), [colors.white, LIGHT_GREY]),
+        ("FONTSIZE",     (0, 1), (-1, -1), 9),
+        ("GRID",         (0, 0), (-1, -1), 0.5, BORDER),
+        ("VALIGN",       (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING",   (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING",(0, 0), (-1, -1), 5),
+        ("LEFTPADDING",  (0, 0), (-1, -1), 8),
+    ]))
+    story.append(tbl)

@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
+venv/
+env/
+.env/
+.venv/
+
+# ML artifacts (large binary files)
+models/*.joblib
+models/*.pkl
+models/*.h5
+
+# Data (keep raw, ignore large processed)
+data/processed/
+
+# Reports (generated at runtime)
+reports/*.pdf
+reports/*.png
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Docker
+.dockerignore
+
+# Logs
+*.log
+logs/
+
+# Environment variables
+.env
+.env.local
+*.env
+
+# Coverage
+.coverage
+htmlcov/
